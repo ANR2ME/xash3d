@@ -24,5 +24,5 @@ after_script:
     - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then ccache --show-stats > ccache_stats.log; fi
     - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sh scripts/travis-deploy.sh travis xash3d-mingw.7z xash3d-linux.7z xash3d-generic.apk android-debug-symbols.txz ccache_stats.log; fi
     - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sh scripts/travis-upload.sh xash3d-mingw.7z xash3d-linux.7z xash3d-generic.apk; fi
-    - if [[ "$TRAVIS_OS_NAME" == "osx"   ]]; then sh scripts/travis-deploy.sh apple xash3d-osx.tar.bz2; fi
+    - if [[ "$TRAVIS_OS_NAME" == "osx"   ]]; then sh scripts/travis-deploy.sh z_apple xash3d-osx.tar.bz2; fi
     - if [[ "$TRAVIS_OS_NAME" == "osx"   ]]; then sh scripts/travis-upload.sh xash3d-osx.tar.bz2; fi
