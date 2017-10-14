@@ -4,7 +4,7 @@
 
 cd $TRAVIS_BUILD_DIR
 mkdir -p osx-build && cd osx-build
-CC="ccache clang" CXX="ccache clang++" CFLAGS="-m32" CXXFLAGS="-m32" cmake -DXASH_SDL=yes -DXASH_VGUI=yes -DXASH_DLL_LOADER=no -DXASH_DEDICATED=no -DHL_SDK_DIR=../vgui-dev/ ../
+CFLAGS="-m32" CXXFLAGS="-m32" cmake -DXASH_SDL=yes -DXASH_VGUI=yes -DXASH_DLL_LOADER=no -DXASH_DEDICATED=no -DHL_SDK_DIR=../vgui-dev/ -DCMAKE_OSX_ARCHITECTURES=i386 ../
 make -j2
 cp engine/libxash.dylib mainui/libxashmenu.dylib vgui_support/libvgui_support.dylib ../vgui-dev/lib/vgui.dylib game_launch/xash3d ../xash3d.sh .
 cp ~/Library/Frameworks/SDL.framework/SDL2 libSDL2.dylib
