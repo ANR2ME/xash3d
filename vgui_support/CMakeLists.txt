@@ -33,12 +33,13 @@ include_directories(
 	../engine/common
 	../engine/client
 	../engine/client/vgui
-	${HL_SDK_DIR}/utils/vgui/include/
 )
 
 add_library(${VGUI_SUPPORT_LIBRARY} MODULE ${VGUI_SUPPORT_SOURCES})
 
 find_package(VGUI REQUIRED)
+
+include_directories(${VGUI_INCLUDE_DIR})
 
 target_link_vgui_hack(${VGUI_SUPPORT_LIBRARY})
 
