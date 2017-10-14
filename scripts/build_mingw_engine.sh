@@ -5,9 +5,9 @@
 cd $TRAVIS_BUILD_DIR
 mkdir -p mingw-build && cd mingw-build
 CC="ccache i686-w64-mingw32-gcc" CXX="ccache i686-w64-mingw32-g++" cmake \
-	-DSDL2_PATH=$(realpath ../sdl2-mingw/i686-w64-mingw32) \
+	-DSDL2_PATH=../sdl2-mingw/i686-w64-mingw32 \
 	-DCMAKE_SYSTEM_NAME=Windows \
-	-DCMAKE_PREFIX_PATH=$(realpath ../sdl2-mingw/i686-w64-mingw32)
+	-DCMAKE_PREFIX_PATH=../sdl2-mingw/i686-w64-mingw32
 	-DXASH_STATIC=ON \
 	-DXASH_VGUI=no \
 	-DXASH_SDL=yes ../
