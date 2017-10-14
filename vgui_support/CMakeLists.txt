@@ -35,7 +35,7 @@ include_directories(
 	../engine/client/vgui
 )
 
-add_library(${VGUI_SUPPORT_LIBRARY} MODULE ${VGUI_SUPPORT_SOURCES})
+add_library(${VGUI_SUPPORT_LIBRARY} SHARED ${VGUI_SUPPORT_SOURCES})
 
 find_package(VGUI REQUIRED)
 
