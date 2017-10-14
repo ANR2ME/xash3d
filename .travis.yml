@@ -3,7 +3,7 @@ cache: ccache
 compiler: gcc
 sudo: true
 git:
-  depth: 3
+  depth: 1
   submodules: true
   
 before_script:
@@ -17,19 +17,15 @@ before_script:
     - wget http://dl.google.com/android/ndk/android-ndk-r10e-linux-x86_64.bin >/dev/null 2>/dev/null
     - 7z x ./android-ndk-r10e-linux-x86_64.bin > /dev/null
     - mv android-ndk-r10e android-ndk
-    - curl -s http://libsdl.org/release/SDL2-devel-2.0.4-mingw.tar.gz | tar xzf -
-    - mv SDL2-2.0.4 SDL2
-    - curl -s http://libsdl.org/release/SDL2-2.0.4.tar.gz | tar xzf -
+    - curl -s http://libsdl.org/release/SDL2-devel-2.0.6-mingw.tar.gz | tar xzf -
+    - mv SDL2-2.0.6 sdl2-mingw
+    - curl -s http://libsdl.org/release/SDL2-2.0.6.tar.gz | tar xzf -
     - git clone --depth 1 https://github.com/FWGS/vgui-dev
     - git clone --depth 1 https://github.com/FWGS/vgui_support_bin
     - git clone --depth 1 https://github.com/FWGS/xash3d-android-project
 script:
     - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sh scripts/build_android_engine.sh; fi
-    - cd ../engine
-    - make -f Makefile.mingw CC="ccache i686-w64-mingw32-gcc" CXX="ccache i686-w64-mingw32-g++" -j2
-    - cp ../vgui_support_bin/vgui_support.dll .
-    - cp ../SDL2/lib/x86/SDL2.dll .
-    - 7z a -t7z ${TRAVIS_BUILD_DIR}/xash3d-mingw.7z -m0=lzma2 -mx=9 -mfb=64 -md=32m -ms=on xash_bin.exe SDL2.dll vgui_support.dll
+    - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sh scripts/build_mingw_engine.sh; fi
     - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sh scripts/build_portable_linux_engine.sh; fi
 after_script:
     - cd ${TRAVIS_BUILD_DIR}

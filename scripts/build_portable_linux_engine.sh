@@ -12,7 +12,13 @@ make install DESTDIR=$(realpath $TRAVIS_BUILD_DIR/sdl2-linux)
 
 cd $TRAVIS_BUILD_DIR
 mkdir -p build && cd build/
-CC="ccache gcc" CXX="ccache gcc" CFLAGS="-m32" CXXFLAGS="-m32" cmake -DCMAKE_PREFIX_PATH=$(realpath $TRAVIS_BUILD_DIR/sdl2-linux/usr/local) -DXASH_STATIC=ON -DXASH_DLL_LOADER=ON -DXASH_VGUI=yes -DMAINUI_USE_STB=yes -DHL_SDK_DIR=$(realpath $TRAVIS_BUILD_DIR/vgui-dev) ../
+CC="ccache gcc" CXX="ccache gcc" CFLAGS="-m32" CXXFLAGS="-m32" cmake \
+	-DCMAKE_PREFIX_PATH=$(realpath $TRAVIS_BUILD_DIR/sdl2-linux/usr/local) \
+	-DXASH_STATIC=ON \
+	-DXASH_DLL_LOADER=ON \
+	-DXASH_VGUI=yes \
+	-DMAINUI_USE_STB=yes \
+	-DHL_SDK_DIR=$(realpath $TRAVIS_BUILD_DIR/vgui-dev) ../
 make -j2
 cp engine/xash .
 cp mainui/libxashmenu.so .
