@@ -4,13 +4,7 @@
 
 cd $TRAVIS_BUILD_DIR
 mkdir -p mingw-build && cd mingw-build
-CC="ccache i686-w64-mingw32-gcc" CXX="ccache i686-w64-mingw32-g++" cmake \
-	-DSDL2_PATH=../sdl2-mingw/i686-w64-mingw32 \
-	-DCMAKE_SYSTEM_NAME=Windows \
-	-DCMAKE_PREFIX_PATH=../sdl2-mingw/i686-w64-mingw32
-	-DXASH_STATIC=ON \
-	-DXASH_VGUI=no \
-	-DXASH_SDL=yes ../
+CC="ccache i686-w64-mingw32-gcc" CXX="ccache i686-w64-mingw32-g++" cmake -DSDL2_PATH=../sdl2-mingw/i686-w64-mingw32 -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_PREFIX_PATH=../sdl2-mingw/i686-w64-mingw32 -DXASH_STATIC=ON -DXASH_VGUI=no -DXASH_SDL=yes ../
 make -j2
 cp engine/xash_sdl.exe .
 cp mainui/menu.dll .
