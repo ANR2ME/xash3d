@@ -37,7 +37,7 @@ qboolean CL_IsPlayerIndex( int idx )
 
 qboolean CL_IsPredicted( void )
 {
-	if( !cl_predict->integer || Host_IsLocalClient() )
+	if( !cl_predict->integer )
 		return false;
 
 	return true;

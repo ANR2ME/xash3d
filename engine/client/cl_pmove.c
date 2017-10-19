@@ -1124,12 +1124,16 @@ void CL_PredictMovement( qboolean repredicting )
 		VectorCopy( cl.refdef.cmd->viewangles, cl.refdef.cl_viewangles );
 	}
 
+	CL_SetUpPlayerPrediction( false, false );
+
 	if( !cl.validsequence )
 		return;
 
 	if(( cls.netchan.outgoing_sequence - cls.netchan.incoming_acknowledged ) >= CL_UPDATE_MASK )
 		return;
 	
+	AngleVectors( cl.refdef.cl_viewangles, cl.refdef.forward, cl.refdef.right, cl.refdef.up );
+
 	// this is the last frame received from the server
 	frame = &cl.frames[cl.parsecountmod];
 
@@ -1161,6 +1165,7 @@ void CL_PredictMovement( qboolean repredicting )
 	cl.predicted.onground = -1;
 
 	CL_PushPMStates();
+	CL_SetSolidEntities();
 	CL_SetSolidPlayers ( cl.playernum );
 
 	for( i = 1; i < CL_UPDATE_MASK && cls.netchan.incoming_acknowledged + i < cls.netchan.outgoing_sequence + stoppoint; i++ )
@@ -1231,7 +1236,7 @@ void CL_PredictMovement( qboolean repredicting )
 		VectorCopy( to->playerstate.origin, cl.predicted.origin );
 		VectorCopy( to->client.velocity,    cl.predicted.velocity );
 		VectorCopy( to->client.punchangle,  cl.predicted.punchangle );
-		VectorCopy( to->client.view_ofs, cl.predicted.viewofs );
+		VectorCopy( to->client.view_ofs,    cl.predicted.viewofs );
 	}
 	else
 	{
