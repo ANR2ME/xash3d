@@ -399,7 +399,37 @@ CLIENT MOVEMENT COMMUNICATION
 */
 /*
 =================
+CL_UpdateClientData
+
+tell the client.dll about player origin, angles, fov, etc
+=================
+*/
+void CL_UpdateClientData( void )
+{
+	client_data_t	cdat;
+
+	if( cls.state != ca_active )
+		return;
+
+	memset( &cdat, 0, sizeof( cdat ) );
+
+	VectorCopy( cl.frame.client.origin, cdat.origin );
+	VectorCopy( cl.refdef.cl_viewangles, cdat.viewangles );
+	cdat.iWeaponBits = cl.frame.client.weapons;
+	cdat.fov = cl.scr_fov;
+
+	if( clgame.dllFuncs.pfnUpdateClientData( &cdat, cl.time ))
+	{
+		// grab changes if successful
+		VectorCopy( cdat.viewangles, cl.refdef.cl_viewangles );
+		cl.scr_fov = cdat.fov;
+	}
+}
+
+/*
+=================
 CL_CreateCmd
+
 =================
 */
 void CL_CreateCmd( void )
@@ -420,33 +450,6 @@ void CL_CreateCmd( void )
 	CL_PushPMStates();
 	CL_SetSolidPlayers ( cl.playernum );
 	VectorCopy( cl.refdef.cl_viewangles, angles );
-
-	// write cdata
-	VectorCopy( cl.frame.client.origin, cl.data.origin );
-	VectorCopy( cl.refdef.cl_viewangles, cl.data.viewangles );
-	cl.data.iWeaponBits = cl.frame.client.weapons;
-	cl.data.fov = cl.scr_fov;
-
-	if( clgame.dllFuncs.pfnUpdateClientData( &cl.data, cl.time ) )
-	{
-		// grab changes if successful
-		VectorCopy( cl.data.viewangles, cl.refdef.cl_viewangles );
-		cl.scr_fov = cl.data.fov;
-	}
-
-	// allways dump the first ten messages,
-	// because it may contain leftover inputs
-	// from the last level
-	if( ++cl.movemessages <= 10 )
-	{
-		if( !cls.demoplayback )
-		{
-			cl.refdef.cmd = &cl.commands[cls.netchan.outgoing_sequence & CL_UPDATE_MASK].cmd;
-			*cl.refdef.cmd = cmd;
-		}
-		CL_PopPMStates();
-		return;
-	}
 
 	// message we are constructing.
 	i = cls.netchan.outgoing_sequence & CL_UPDATE_MASK;
@@ -2107,12 +2110,19 @@ void Host_ClientBegin( void )
 	if( !cls.initialized )
 		return;
 
-	if( SV_Active() )
-	{
-		CL_SendCommand();
+	// evaluate console animation
+	Con_RunConsole ();
 
-		CL_PredictMovement();
-	}
+	// exec console commands
+	Cbuf_Execute ();
+
+
+	CL_UpdateClientData();
+
+	// if running the server locally, make intentions now
+	if( SV_Active( )) CL_SendCommand ();
+
+	CL_PredictMovement( false );
 }
 
 /*
@@ -2142,7 +2152,13 @@ void Host_ClientFrame( void )
 
 	if( cls.initialized )
 	{
+		// if running the server remotely, send intentions now after
+		// the incoming messages have been read
+		if( !SV_Active( )) CL_SendCommand ();
+
 		clgame.dllFuncs.pfnFrame( host.frametime );
+
+		CL_SetLastUpdate();
 
 		// fetch results from server
 		CL_ReadPackets();
@@ -2156,14 +2172,9 @@ void Host_ClientFrame( void )
 			if( !cl.audio_prepped ) CL_PrepSound();
 		}
 
-		// send a new command message to the server
-		if( !SV_Active() )
-		{
-			CL_SendCommand();
-
-			// predict all unacknowledged movements
-			CL_PredictMovement();
-		}
+		// do prediction again in case we got
+		// a new portion updates from server
+		CL_RedoPrediction ();
 	}
 
 	// update the screen
@@ -2179,8 +2190,6 @@ void Host_ClientFrame( void )
 
 		SCR_RunCinematic();
 	}
-
-	Con_RunConsole();
 
 	cls.framecount++;
 }

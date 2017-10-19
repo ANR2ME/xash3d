@@ -37,10 +37,7 @@ qboolean CL_IsPlayerIndex( int idx )
 
 qboolean CL_IsPredicted( void )
 {
-	if( !cl_predict->integer || !cl.frame.valid || cl.background || Host_IsLocalClient() )
-		return false;
-
-	if(( cls.netchan.outgoing_sequence - cls.netchan.incoming_acknowledged ) >= ( CL_UPDATE_BACKUP - 1 ))
+	if( !cl_predict->integer || Host_IsLocalClient() )
 		return false;
 
 	return true;

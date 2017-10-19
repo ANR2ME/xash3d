@@ -161,8 +161,6 @@ typedef struct
 
 	uint		checksum;			// for catching cheater maps
 
-	client_data_t	data;			// some clientdata holds
-
 	frame_t		frame;			// received from server
 	frame_t		frames[MULTIPLAYER_BACKUP];	// alloced on svc_serverdata
 	runcmd_t		commands[MULTIPLAYER_BACKUP];	// each mesage will send several old cmds
@@ -524,6 +522,8 @@ typedef struct
 	qboolean splitcompress;			// enabled only on server->client netchan
 	qboolean need_save_config;
 	qboolean internetservers_wait;	// internetservers is waiting for dns request
+
+	int lastupdate_sequence;
 } client_static_t;
 
 
@@ -770,7 +770,7 @@ void V_WriteOverviewScript( void );
 void CL_SetSolidEntities( void );
 void CL_SetSolidPlayers( int playernum );
 void CL_InitClientMove( void );
-void CL_PredictMovement( void );
+void CL_PredictMovement(qboolean repredicting );
 void CL_CheckPredictionError( void );
 qboolean CL_IsPredicted( void );
 int CL_TruePointContents( const vec3_t p );
@@ -783,6 +783,8 @@ void CL_ClearPhysEnts( void );
 void CL_PushPMStates( void );
 void CL_PopPMStates( void );
 void CL_SetUpPlayerPrediction( int dopred, int bIncludeLocalClient );
+void CL_SetLastUpdate( void );
+void CL_RedoPrediction( void );
 
 //
 // cl_studio.c

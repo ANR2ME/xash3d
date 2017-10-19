@@ -24,6 +24,10 @@ GNU General Public License for more details.
 #include "studio.h"
 #include "library.h" // Loader_GetDllHandle( )
 
+#define MIN_CORRECTION_DISTANCE	0.25f	// use smoothing if error is > this
+#define MIN_PREDICTION_EPSILON	0.5f	// complain if error is > this and we have cl_showerror set
+#define MAX_PREDICTION_ERROR	64.0f	// above this is assumed to be a teleport, don't smooth, etc.
+
 void CL_ClearPhysEnts( void )
 {
 	clgame.pmove->numtouch = 0;
@@ -70,6 +74,30 @@ void GAME_EXPORT CL_PopPMStates( void )
 	else
 	{
 		MsgDev( D_WARN, "CL_PopPMStates called without stack\n");
+	}
+}
+
+/*
+===============
+CL_SetLastUpdate
+===============
+*/
+void CL_SetLastUpdate( void )
+{
+	cls.lastupdate_sequence = cls.netchan.incoming_sequence;
+}
+
+/*
+===============
+CL_RedoPrediction
+===============
+*/
+void CL_RedoPrediction( void )
+{
+	if ( cls.netchan.incoming_sequence != cls.lastupdate_sequence )
+	{
+		CL_PredictMovement( true );
+		CL_CheckPredictionError();
 	}
 }
 
@@ -1029,95 +1057,45 @@ CL_CheckPredictionError
 */
 void CL_CheckPredictionError( void )
 {
-	int	frame;
-	vec3_t	delta;
-	float	len, maxspd;
+	int		frame, cmd;
+	static int	pos = 0;
+	vec3_t		delta;
+	float		dist;
 
-	if( !CL_IsPredicted( )) return;
+	if( !CL_IsPredicted( ))
+		return;
 
 	// calculate the last usercmd_t we sent that the server has processed
 	frame = ( cls.netchan.incoming_acknowledged ) & CL_UPDATE_MASK;
+	cmd = cl.parsecountmod;
 
 	// compare what the server returned with what we had predicted it to be
-	VectorSubtract( cl.frame.playerstate[cl.playernum].origin, cl.predicted.origins[frame], delta );
-
-	maxspd = ( clgame.movevars.maxvelocity * host.frametime );
-	len = VectorLength( delta );
+	VectorSubtract( cl.frames[cmd].playerstate[cl.playernum].origin, cl.predicted.origins[frame], delta );
+	dist = VectorLength( delta );
 
 	// save the prediction error for interpolation
-	/*if(( cl.frame.client.flags & EF_NOINTERP ) || len > maxspd )*/
-	if( len > 64.0f )
+	if( dist > MAX_PREDICTION_ERROR )
 	{
+		if( cl_showerror->value && host.developer >= D_ERROR )
+			Con_NPrintf( 10 + ( ++pos & 3 ), "^3player teleported:^7 %.3f units\n", dist );
+
 		// a teleport or something or gamepaused
 		VectorClear( cl.predicted.error );
 	}
 	else
 	{
-		if( cl_showerror->integer && len > 0.5f )
-			MsgDev( D_ERROR, "prediction error on %i: %g\n", cl.parsecount, len );
+		if( cl_showerror->value && dist > MIN_PREDICTION_EPSILON && host.developer >= D_ERROR )
+			Con_NPrintf( 10 + ( ++pos & 3 ), "^1prediction error:^7 %.3f units\n", dist );
 
-		VectorCopy( cl.frame.playerstate[cl.playernum].origin, cl.predicted.origins[frame] );
+		VectorCopy( cl.frames[cmd].playerstate[cl.playernum].origin, cl.predicted.origins[frame] );
 
 		// save for error interpolation
 		VectorCopy( delta, cl.predicted.error );
 
-		if ( len > 0.25 && cl.maxclients > 1 )
+		if(( dist > MIN_CORRECTION_DISTANCE ) && (( cl.maxclients > 1 ) /* || FBitSet( host.features, ENGINE_FIXED_FRAMERATE ) */))
 			cl.predicted.correction_time = cl_smoothtime->value;
 	}
 }
-
-/*
-===========
-CL_PostRunCmd
-
-used while predicting is off but local weapons is on
-===========
-*/
-void CL_PostRunCmd( usercmd_t *ucmd, int random_seed )
-{
-	local_state_t	from = { 0 }, to = { 0 };
-
-	Q_memcpy( from.weapondata, cl.frame.weapondata, sizeof( from.weapondata ));
-
-	from.playerstate = cl.frame.playerstate[cl.playernum];
-	from.client = cl.frame.client;
-	to = from;
-
-	clgame.dllFuncs.pfnPostRunCmd( &from, &to, ucmd, true, cl.time, random_seed );
-}
-
-
-
-/*
-=================
-CL_FakeUsercmd
-
-Runs client weapons prediction code
-=================
-*/
-void CL_FakeUsercmd(local_state_t * from, local_state_t * to, usercmd_t * u, qboolean runfuncs, double * pfElapsed, unsigned int random_seed)
-{
-	usercmd_t cmd;
-	local_state_t temp = { 0 };
-	usercmd_t split;
-
-	while (u->msec > 50)
-	{
-		split = *u;
-		split.msec /= 2.0;
-		CL_FakeUsercmd( from, &temp, &split, runfuncs, pfElapsed, random_seed );
-
-		from = &temp;
-		u = &split;
-	}
-
-	cmd = *u;
-	*to = *from;
-
-	clgame.dllFuncs.pfnPostRunCmd(from, to, &cmd, runfuncs, *pfElapsed, random_seed);
-	*pfElapsed += cmd.msec / 1000.0;
-}
-
 
 /*
 =================
@@ -1126,259 +1104,201 @@ CL_PredictMovement
 Sets cl.predicted_origin and cl.predicted_angles
 =================
 */
-void CL_PredictMovement( void )
+void CL_PredictMovement( qboolean repredicting )
 {
-	double	time;
-	usercmd_t		*ucmd;
-	int		frame = 1;
-	qboolean		runfuncs = false;
-	int		ack, outgoing_command;
+	runcmd_t		*to_cmd, *from_cmd;
+	local_state_t	*from = NULL, *to = NULL;
 	int		current_command;
 	int		current_command_mod;
-	local_state_t *from = 0, *to = 0;
+	frame_t		*frame = NULL;
+	int		i, stoppoint;
+	qboolean		runfuncs;
+	double		time;
+	float		f;
 
 	if( cls.state != ca_active ) return;
 
-	if( cls.demoplayback && cl.refdef.cmd != NULL )
+	if( cls.demoplayback && cl.refdef.cmd != NULL && !repredicting )
 	{
 		// restore viewangles from cmd.angles
 		VectorCopy( cl.refdef.cmd->viewangles, cl.refdef.cl_viewangles );
 	}
 
-	if( !CL_IsInGame( )) return;
-	
-	CL_SetUpPlayerPrediction( false, false );
-
-	// unpredicted pure angled values converted into axis
-	AngleVectors( cl.refdef.cl_viewangles, cl.refdef.forward, cl.refdef.right, cl.refdef.up );
-
-	ASSERT( cl.refdef.cmd != NULL );
-
-	if( ( !cl_predict->integer || Host_IsLocalClient() )  && cl_lw->integer )
-	{
-		// fake prediction code
-		// we need to perform cl_lw prediction while cl_predict is disabled
-		// because cl_lw is enabled by default in Half-Life
-
-		ack = cls.netchan.incoming_acknowledged;
-		outgoing_command = cls.netchan.outgoing_sequence;
-
-		from = &cl.predict[cl.parsecountmod];
-		from->playerstate = cl.frame.playerstate[cl.playernum];
-		from->client = cl.frame.client;
-		Q_memcpy( from->weapondata, cl.frame.weapondata, sizeof( from->weapondata ));
-
-		time = cl.frame.time;
-
-		CL_SetSolidEntities ();
-		CL_SetSolidPlayers ( cl.playernum );
-
-		while( 1 )
-		{
-			// we've run too far forward
-			if( frame >= CL_UPDATE_MASK )
-				break;
-
-			// Incoming_acknowledged is the last usercmd the server acknowledged having acted upon
-			current_command = ack + frame;
-			current_command_mod = current_command & CL_UPDATE_MASK;
-
-			// we've caught up to the current command.
-			if( current_command >= outgoing_command )
-				break;
-
-			to = &cl.predict[( cl.parsecountmod + frame ) & CL_UPDATE_MASK];
-			runfuncs = !cl.commands[current_command_mod].processedfuncs;
-			ucmd = &cl.commands[current_command_mod].cmd;
-
-			CL_RunUsercmd( from, to, ucmd, runfuncs, &time, cls.netchan.incoming_acknowledged + frame );
-			cl.commands[current_command_mod].processedfuncs = true;
-
-			// save for debug checking
-			VectorCopy( to->playerstate.origin, cl.predicted.origins[current_command_mod] );
-
-			from = to;
-			frame++;
-		}
-
-
-		// keep cl.predicted.origin valid
-		VectorCopy( cl.frame.client.origin, cl.predicted.origin );
-		VectorCopy( cl.frame.client.velocity, cl.predicted.velocity );
-		VectorCopy( cl.frame.client.punchangle, cl.predicted.punchangle );
-		VectorCopy( cl.frame.client.view_ofs, cl.predicted.viewofs );
-		cl.predicted.viewmodel = cl.frame.client.viewmodel;
-		cl.predicted.usehull = from->playerstate.usehull;
-		cl.predicted.waterlevel = cl.frame.client.waterlevel;
-		cl.predicted.correction_time = 0;
-		cl.predicted.moving = 0;
-		cl.predicted.onground = -1;
+	if( !cl.validsequence )
 		return;
+
+	if(( cls.netchan.outgoing_sequence - cls.netchan.incoming_acknowledged ) >= CL_UPDATE_MASK )
+		return;
+	
+	// this is the last frame received from the server
+	frame = &cl.frames[cl.parsecountmod];
+
+	if( !CL_IsPredicted( ))
+	{
+		VectorCopy( frame->client.velocity, cl.predicted.origin );
+		VectorCopy( frame->client.origin, cl.predicted.velocity );
+		VectorCopy( frame->client.punchangle, cl.predicted.punchangle );
+		VectorCopy( frame->client.view_ofs, cl.predicted.viewofs );
+		cl.predicted.usehull = frame->playerstate[cl.playernum].usehull;
+		cl.predicted.waterlevel = frame->client.waterlevel;
+
+		if( frame->client.flags & FL_ONGROUND )
+			cl.predicted.onground = frame->playerstate[cl.playernum].onground;
+		else cl.predicted.onground = -1;
+	}
+
+	from = &cl.predict[cl.parsecountmod];
+	from_cmd = &cl.commands[cls.netchan.incoming_acknowledged & CL_UPDATE_MASK];
+	memcpy( from->weapondata, frame->weapondata, sizeof( from->weapondata ));
+	from->playerstate = frame->playerstate[cl.playernum];
+	from->client = frame->client;
+
+	if( !frame->valid ) return;
+
+	time = cl.frame.time;
+	stoppoint = ( repredicting ) ? 0 : 1;
+	// cl.local.repredicting = repredicting;
+	cl.predicted.onground = -1;
+
+	CL_PushPMStates();
+	CL_SetSolidPlayers ( cl.playernum );
+
+	for( i = 1; i < CL_UPDATE_MASK && cls.netchan.incoming_acknowledged + i < cls.netchan.outgoing_sequence + stoppoint; i++ )
+	{
+		current_command = cls.netchan.incoming_acknowledged + i;
+		current_command_mod = current_command & CL_UPDATE_MASK;
+
+		to = &cl.predict[(cl.parsecountmod + i) & CL_UPDATE_MASK];
+		to_cmd = &cl.commands[current_command_mod];
+		runfuncs = ( !repredicting && !to_cmd->processedfuncs );
+
+		CL_RunUsercmd( from, to, &to_cmd->cmd, runfuncs, &time, current_command );
+		VectorCopy( to->playerstate.origin, cl.predicted.origins[current_command_mod] );
+		to_cmd->processedfuncs = true;
+
+		if( to_cmd->senttime >= host.realtime )
+			break;
+		from = to;
+		from_cmd = to_cmd;
+	}
+
+	CL_PopPMStates();
+
+	if(( i == CL_UPDATE_MASK ) || ( !to && !repredicting ))
+	{
+		// cl.local.repredicting = false;
+		return; // net hasn't deliver packets in a long time...
+	}
+
+	if( !to )
+	{
+		to = from;
+		to_cmd = from_cmd;
 	}
 
 	if( !CL_IsPredicted( ))
 	{
-		local_state_t	from = { 0 }, to = { 0 };
+		// keep onground actual
+		if( frame->client.flags & FL_ONGROUND )
+			cl.predicted.onground = frame->playerstate[cl.playernum].onground;
+		else cl.predicted.onground = -1;
 
-		Q_memcpy( from.weapondata, cl.frame.weapondata, sizeof( from.weapondata ));
-		from.playerstate = cl.frame.playerstate[cl.playernum];
-		from.client = cl.frame.client;
-
-		to = from;
-
-		clgame.dllFuncs.pfnPostRunCmd( &from, &to, cl.refdef.cmd, !cl_predict->integer ? true : false, cl.time, cls.lastoutgoingcommand );
-
-		// fake unpredicted values
-		VectorCopy( to.client.origin, cl.predicted.origin );
-		VectorCopy( to.client.velocity, cl.predicted.velocity );
-		VectorCopy( to.client.punchangle, cl.predicted.punchangle );
-		VectorCopy( to.client.view_ofs, cl.predicted.viewofs );
-		cl.predicted.usehull = to.playerstate.usehull;
-		cl.predicted.waterlevel = to.client.waterlevel;
-		cl.predicted.viewmodel = to.client.viewmodel;
-		cl.predicted.correction_time = 0;
-		cl.predicted.moving = 0;
-		cl.predicted.onground = -1;
-
+		if( !repredicting || !cl_lw->value )
+			cl.predicted.viewmodel = to->client.viewmodel;
+		// cl.predicted.repredicting = false;
+		cl.predicted.moving = false;
 		return;
 	}
 
-	ack = cls.netchan.incoming_acknowledged;
-	outgoing_command = cls.netchan.outgoing_sequence;
 
-	from = &cl.predict[cl.parsecountmod];
-	Q_memcpy( from->weapondata, cl.frame.weapondata, sizeof( from->weapondata ));
-	from->playerstate = cl.frame.playerstate[cl.playernum];
-	from->client = cl.frame.client;
-
-	time = cl.frame.time;
-
-	CL_SetSolidEntities ();
-	CL_SetSolidPlayers ( cl.playernum );
-
-	while( 1 )
+	// now interpolate some fraction of the final frame
+	if( to_cmd->senttime == from_cmd->senttime )
 	{
-		// we've run too far forward
-		if( frame >= CL_UPDATE_MASK )
-			break;
-
-		// Incoming_acknowledged is the last usercmd the server acknowledged having acted upon
-		current_command = ack + frame;
-		current_command_mod = current_command & CL_UPDATE_MASK;
-
-		// we've caught up to the current command.
-		if( current_command >= outgoing_command )
-			break;
-
-		to = &cl.predict[( cl.parsecountmod + frame ) & CL_UPDATE_MASK];
-		runfuncs = !cl.commands[current_command_mod].processedfuncs;
-		ucmd = &cl.commands[current_command_mod].cmd;
-
-		CL_RunUsercmd( from, to, ucmd, runfuncs, &time, cls.netchan.incoming_acknowledged + frame );
-		cl.commands[current_command_mod].processedfuncs = true;
-
-		// save for debug checking
-		VectorCopy( to->playerstate.origin, cl.predicted.origins[current_command_mod] );
-
-		from = to;
-		frame++;
+		f = 0.0f;
+	}
+	else
+	{
+		f = (host.realtime - from_cmd->senttime) / (to_cmd->senttime - from_cmd->senttime);
+		f = bound( 0.0f, f, 1.0f );
 	}
 
-	if( to )
+	if( f != 1.0f && f != 0.0f ) Msg( "Predict interp: %g\n", f );
+
+	if( fabs(to->playerstate.origin[0] - from->playerstate.origin[0]) > 128.0f ||
+		fabs(to->playerstate.origin[1] - from->playerstate.origin[1]) > 128.0f ||
+		fabs(to->playerstate.origin[2] - from->playerstate.origin[2]) > 128.0f )
 	{
-		float t0 = cl.commands[( cl.parsecountmod + frame - 1) & CL_UPDATE_MASK].senttime,
-			  t1 = cl.commands[( cl.parsecountmod + frame ) & CL_UPDATE_MASK].senttime;
-		float t;
-		if( t0 == t1 )
-			t = 0.0f;
-		else
-		{
-			t = (host.realtime - t0) / (t1 - t0);
-			t = bound( 0.0f, t, 1.0f );
-		}
-
-		if( fabs(to->playerstate.origin[0] - from->playerstate.origin[0]) > 128.0f ||
-			fabs(to->playerstate.origin[1] - from->playerstate.origin[1]) > 128.0f ||
-			fabs(to->playerstate.origin[2] - from->playerstate.origin[2]) > 128.0f )
-		{
-			VectorCopy( to->playerstate.origin, cl.predicted.origin );
-			VectorCopy( to->client.velocity,    cl.predicted.velocity );
-			VectorCopy( to->client.punchangle,  cl.predicted.punchangle );
-			VectorCopy( to->client.view_ofs, cl.predicted.viewofs );
-		}
-		else
-		{
-			vec3_t delta_origin, delta_punch, delta_vel;
-			VectorSubtract( to->playerstate.origin, from->playerstate.origin, delta_origin );
-			VectorSubtract( to->client.velocity,    from->client.velocity,    delta_vel );
-			VectorSubtract( to->client.punchangle,  from->client.punchangle,  delta_punch );
-
-			VectorMA( from->playerstate.origin, t, delta_origin, cl.predicted.origin );
-			VectorMA( from->client.velocity,    t, delta_vel,    cl.predicted.velocity );
-			VectorMA( from->client.punchangle,  t, delta_punch,  cl.predicted.punchangle );
-
-			if( from->playerstate.usehull == to->playerstate.usehull )
-			{
-				vec3_t delta_viewofs;
-				VectorSubtract( to->client.view_ofs, from->client.view_ofs, delta_viewofs );
-				VectorMA( from->client.view_ofs, t, delta_viewofs, cl.predicted.viewofs );
-			}
-			else
-			{
-				VectorCopy( to->client.view_ofs, cl.predicted.viewofs );
-			}
-		}
-
-		cl.predicted.waterlevel = to->client.waterlevel;
-		cl.predicted.viewmodel  = to->client.viewmodel;
-		cl.predicted.usehull    = to->playerstate.usehull;
-
-		if( to->client.flags & FL_ONGROUND )
-		{
-			cl_entity_t *ent = CL_GetEntityByIndex( cl.predicted.lastground );
-			
-			cl.predicted.onground = cl.predicted.lastground;
-			cl.predicted.moving = 0;
-
-			if( ent )
-			{
-				vec2_t delta;
-
-				Vector2Subtract( ent->curstate.origin, ent->prevstate.origin, delta );
-				// DON'T ENABLE THIS. OTHERWISE IT WILL BREAK ELEVATORS IN MULTIPLAYER
-				// delta[2] = ent->curstate.origin[2] - ent->prevstate.origin[2];
-
-				if( !Vector2IsNull( delta ) )
-				{
-					cl.predicted.moving = 1;
-					cl.predicted.correction_time = 0;
-				}
-			}
-		}
-		else
-		{
-			cl.predicted.onground = -1;
-			cl.predicted.moving = 0;
-		}
-
-		if ( cl.predicted.correction_time > 0.0 && !cl_nosmooth->value && cl_smoothtime->value )
-		{
-			float d;
-			vec3_t delta;
-
-			if( cl_smoothtime->value <= 0 )
-				Cvar_SetFloat( "cl_smoothtime", 0.1 );
-
-			cl.predicted.correction_time = bound( 0, cl.predicted.correction_time - host.frametime, cl_smoothtime->value );
-
-			d = 1 - cl.predicted.correction_time / cl_smoothtime->value;
-
-			VectorSubtract( cl.predicted.origin, cl.predicted.lastorigin, delta );
-			VectorMA( cl.predicted.lastorigin, d, delta, cl.predicted.origin );
-		}
-		VectorCopy( cl.predicted.origin, cl.predicted.lastorigin );
-		CL_SetIdealPitch();
+		VectorCopy( to->playerstate.origin, cl.predicted.origin );
+		VectorCopy( to->client.velocity,    cl.predicted.velocity );
+		VectorCopy( to->client.punchangle,  cl.predicted.punchangle );
+		VectorCopy( to->client.view_ofs, cl.predicted.viewofs );
 	}
-	CL_CheckPredictionError();
+	else
+	{
+		VectorLerp( from->playerstate.origin, f, to->playerstate.origin, cl.predicted.origin );
+		VectorLerp( from->client.velocity, f, to->client.velocity, cl.predicted.velocity );
+		VectorLerp( from->client.punchangle, f, to->client.punchangle, cl.predicted.punchangle );
+
+		if( from->playerstate.usehull == to->playerstate.usehull )
+			VectorLerp( from->client.view_ofs, f, to->client.view_ofs, cl.predicted.viewofs );
+		else VectorCopy( to->client.view_ofs, cl.predicted.viewofs );
+	}
+
+	cl.predicted.waterlevel = to->client.waterlevel;
+	cl.predicted.usehull = to->playerstate.usehull;
+	if( !repredicting || !cl_lw->value )
+		cl.predicted.viewmodel = to->client.viewmodel;
+
+	if( to->client.flags & FL_ONGROUND )
+	{
+		cl_entity_t *ent = CL_GetEntityByIndex( cl.predicted.lastground );
+
+		cl.predicted.onground = cl.predicted.lastground;
+		cl.predicted.moving = false;
+
+		if( ent )
+		{
+			vec2_t delta;
+
+			Vector2Subtract( ent->curstate.origin, ent->prevstate.origin, delta );
+			// DON'T ENABLE THIS. OTHERWISE IT WILL BREAK ELEVATORS IN MULTIPLAYER
+			// delta[2] = ent->curstate.origin[2] - ent->prevstate.origin[2];
+
+			if( !Vector2IsNull( delta ) )
+			{
+				cl.predicted.moving = true;
+				cl.predicted.correction_time = 0;
+			}
+		}
+	}
+	else
+	{
+		cl.predicted.moving = false;
+		cl.predicted.onground = -1;
+	}
+
+	if ( cl.predicted.correction_time > 0.0 && !cl_nosmooth->value && cl_smoothtime->value )
+	{
+		float d;
+		vec3_t delta;
+
+		// only decay timer once per frame
+		if( !repredicting )
+			cl.predicted.correction_time -= host.frametime;
+
+		// Make sure smoothtime is postive
+		if( cl_smoothtime->value <= 0.0 )
+			Cvar_DirectSet( cl_smoothtime, "0.1" );
+
+		// Clamp from 0 to cl_smoothtime.value
+		cl.predicted.correction_time = bound( 0.0, cl.predicted.correction_time, cl_smoothtime->value );
+
+		d = 1 - cl.predicted.correction_time / cl_smoothtime->value;
+
+		VectorSubtract( cl.predicted.origin, cl.predicted.lastorigin, delta );
+		VectorMA( cl.predicted.lastorigin, d, delta, cl.predicted.origin );
+	}
+
+	VectorCopy( cl.predicted.origin, cl.predicted.lastorigin );
 }
 #endif // XASH_DEDICATED
